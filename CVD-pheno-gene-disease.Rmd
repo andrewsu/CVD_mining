@@ -1,0 +1,24 @@
+---
+title: "Cardiovascular phenotypes to diseases and genes"
+output: html_document
+---
+
+Want to find genetic diseases (for which the causative gene is known) that have a cardiovascular phenotype.
+
+Starting with "Abnormality of the cardiovascular system" (HP:0001626), download disease associations from Monarch, save to data table
+
+```{r}
+library(data.table)
+dt <- fread("https://solr.monarchinitiative.org/solr/golr/select?defType=edismax&qt=standard&indent=on&wt=csv&rows=100000&start=0&fl=subject,subject_label,relation,relation_label,object,object_label,evidence,evidence_label,source,is_defined_by,qualifier&facet=true&facet.mincount=1&facet.sort=count&json.nl=arrarr&facet.limit=25&facet.method=enum&csv.encapsulator=&csv.separator=%09&csv.header=true&csv.mv.separator=%7C&fq=object_closure:%22HP:0001626%22&fq=subject_category:%22disease%22&facet.field=subject_taxon_closure_label&facet.field=object_taxon_closure_label&q=*:*")
+
+```
+
+filter by OMIM and sort by most common phenotype
+
+```{r}
+setkeyv(dt,c("subject","object_label"))
+dt.OMIM <- dt[like(subject,"OMIM:")]
+print(dt.OMIM[,.N,by="object_label"][order(-N)][N>10],topn=100)
+```
+
+ 
