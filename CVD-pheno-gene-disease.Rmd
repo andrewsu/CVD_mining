@@ -5,20 +5,79 @@ output: html_document
 
 Want to find genetic diseases (for which the causative gene is known) that have a cardiovascular phenotype.
 
-Starting with "Abnormality of the cardiovascular system" (HP:0001626), download disease associations from Monarch, save to data table
+Starting with "Abnormality of the cardiovascular system" (HP:0001626), download disease associations from Monarch (presumably imported from HPO), save to data table
 
 ```{r}
 library(data.table)
-dt <- fread("https://solr.monarchinitiative.org/solr/golr/select?defType=edismax&qt=standard&indent=on&wt=csv&rows=100000&start=0&fl=subject,subject_label,relation,relation_label,object,object_label,evidence,evidence_label,source,is_defined_by,qualifier&facet=true&facet.mincount=1&facet.sort=count&json.nl=arrarr&facet.limit=25&facet.method=enum&csv.encapsulator=&csv.separator=%09&csv.header=true&csv.mv.separator=%7C&fq=object_closure:%22HP:0001626%22&fq=subject_category:%22disease%22&facet.field=subject_taxon_closure_label&facet.field=object_taxon_closure_label&q=*:*")
+dt.monarch <- fread("https://solr.monarchinitiative.org/solr/golr/select?defType=edismax&qt=standard&indent=on&wt=csv&rows=100000&start=0&fl=subject,subject_label,relation,relation_label,object,object_label,evidence,evidence_label,source,is_defined_by,qualifier&facet=true&facet.mincount=1&facet.sort=count&json.nl=arrarr&facet.limit=25&facet.method=enum&csv.encapsulator=&csv.separator=%09&csv.header=true&csv.mv.separator=%7C&fq=object_closure:%22HP:0001626%22&fq=subject_category:%22disease%22&facet.field=subject_taxon_closure_label&facet.field=object_taxon_closure_label&q=*:*")
 
+# add new column just with OMIM ID
+dt.monarch[,subjectOMIM:=sub("OMIM:","",dt.OMIM$subject)]
+dim(dt.monarch)
+
+#filter by diseases mapped to OMIM
+setkeyv(dt.monarch,c("subject","object_label"))
+dt.monarch <- dt.monarch[like(subject,"OMIM:")]
+dim(dt.monarch)
+
+# remove ECO:0000501 (IEA) 
+dt.monarch <- dt.monarch[evidence != "ECO:0000501"]
+dim(dt.monarch)
+
+# and sort by most common phenotype
+print(dt.monarch[,.N,by="object_label"][order(-N)],topn=100)
 ```
 
-filter by OMIM and sort by most common phenotype
+download and parse OMIM file
 
 ```{r}
-setkeyv(dt,c("subject","object_label"))
-dt.OMIM <- dt[like(subject,"OMIM:")]
-print(dt.OMIM[,.N,by="object_label"][order(-N)][N>10],topn=100)
+library(yaml)
+config <- yaml.load_file("config.yml")
+omimURL <- paste("http://data.omim.org/downloads/",config$omimkey,"/morbidmap.txt",sep="")
+dt.omim <- fread(omimURL)
+dim(dt.omim)
+
+# remove lines that don't have a OMIM ID in the "# Phenotype" column
+dt.omim <- dt.omim[grep(' \\d{6} ',dt.omim$`# Phenotype`),]
+dim(dt.omim)
+
+# parse out the OMIM Phenotype ID from the '# Phenotype' column into new 'DiseaseID' column
+dt.omim[, DiseaseID:=sub('.*(\\d{6}).*','OMIM:\\1',dt.omim$`# Phenotype`)]
+
+# remove duplicated tuples 'MIM Number' - 'DiseaseID'
+setkeyv(dt.omim,c("MIM Number","DiseaseID"))
+dt.omim <- unique(dt.omim)
+dim(dt.omim)
+
+# concatenate genes into a single field --> dt.omim2
+dt.omim2 <- dt.omim[,.(concat=paste0(`MIM Number`,collapse=",")),by=.(DiseaseID)]
+colnames(dt.omim2)[2] <- "OMIMGeneIDs"
 ```
 
- 
+join the HPO table and OMIM table into dt.merge
+```{r}
+setkeyv(dt.monarch,"subject")
+setkeyv(dt.omim2,"DiseaseID")
+dt.merge <- merge(dt.monarch,dt.omim2,by.x="subject",by.y="DiseaseID")
+
+```
+
+rank phenotypes by # of linked diseases
+```{r}
+head(dt.merge[,.N,by="object_label"][order(-N)],n=20)
+
+# to investigate the linked diseases for any given phenotype:
+dt.merge[object_label=="Ventricular septal defect",.(subject,subject_label,OMIMGeneIDs)]
+```
+
+rank genes by # of linked diseases
+```{r}
+dt.merge2 <- unique(dt.merge[,.(subject,subject_label,OMIMGeneIDs)])
+
+head(dt.merge2[,.N,by="OMIMGeneIDs"][order(-N)],n=20)
+
+# to investigate the linked phenotypes for a given gene ID (eg 150330)
+dt.merge2[OMIMGeneIDs=="150330"]
+
+```
+
